@@ -45,6 +45,8 @@ def orchestrator_node(state: banking_state):
         logger.info(f"Orchestrator created {len(plan.tasks)} tasks.")
         
         # Save the planned tasks to the state
+        agent_type = getattr(plan.tasks[0], "agent", None) or getattr(plan.tasks[0], "type", "unknown")
+        logger.info(f"Assigned agent: {agent_type}")
         return {"tasks": plan.tasks}
         
     except Exception as e:

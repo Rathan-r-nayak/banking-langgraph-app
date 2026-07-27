@@ -1,17 +1,19 @@
 import json
 import uuid
-from langchain_ollama import ChatOllama
 from langchain_core.messages import SystemMessage, HumanMessage
-from langgraph.store.memory import InMemoryStore
-from Config.llm_config import fast_llm
-from State.banking_state import BankingState
 from langchain_core.runnables import RunnableConfig
+from Config.llm_config import fast_llm
 
-# Update the function signature from config: dict -> config: RunnableConfig
-def remember_node(state: dict, config: RunnableConfig, store):
-    """Uses Ollama to intelligently extract long-term banking facts from the conversation."""
-    user_id = config["configurable"].get("user_id", "default_user")
+def remember_node(state: dict, config: RunnableConfig):
+    """Uses Ollama/fast_llm to intelligently extract long-term banking facts from the conversation."""
+    user_id = config.get("configurable", {}).get("user_id", "default_user")
     namespace = ("user", user_id, "facts")
+    
+    # Safely retrieve store from config if injected by LangGraph
+    store = config.get("configurable", {}).get("store")
+    if not store:
+        # If store isn't available in config, just return safely
+        return {}
     
     # Grab the recent conversation history (last few messages for context)
     messages = state.get("messages", [])
@@ -21,17 +23,14 @@ def remember_node(state: dict, config: RunnableConfig, store):
     # Format the last couple of messages into a transcript block for the LLM
     transcript = "\n".join([f"{msg.type.upper()}: {msg.content}" for msg in messages[-4:]])
     
-    # Initialize your local Ollama model
-    # (Using your local Qwen Coder model since it excels at JSON parsing)
-   
     extraction_prompt = f"""Analyze the conversation below. Extract any durable, long-term personal facts about the user (e.g., salary, financial goals, preferred accounts, risk appetite, or recurring financial constraints) that would be useful to remember for future banking sessions.
 
     If there are no new facts worth remembering, return an empty JSON array: []
 
     If there are facts, return a valid JSON array of objects with a single key "fact". Example format:
     [
-    { "fact": "User's monthly salary is 50000" },
-    { "fact": "User prefers low-risk investment options" }
+    {{ "fact": "User's monthly salary is 50000" }},
+    {{ "fact": "User prefers low-risk investment options" }}
     ]
 
     Conversation Transcript:
@@ -41,7 +40,7 @@ def remember_node(state: dict, config: RunnableConfig, store):
     """
 
     try:
-        # Call the local LLM
+        # Call the LLM
         response = fast_llm.invoke([
             SystemMessage(content="You are a precise data extraction assistant. You output strictly valid JSON."),
             HumanMessage(content=extraction_prompt)
@@ -73,6 +72,6 @@ def remember_node(state: dict, config: RunnableConfig, store):
                 print(f"💾 [LTM Saved] -> {fact_text}")
                 
     except Exception as e:
-        print(f"❌ Failed to extract memory via Ollama: {e}")
+        print(f"❌ Failed to extract memory via LLM: {e}")
         
     return {}

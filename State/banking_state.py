@@ -1,5 +1,5 @@
 import operator
-from typing import Annotated, Any, Sequence, TypedDict
+from typing import Annotated, Any, Literal, Sequence, TypedDict
 from langgraph.store.memory import InMemoryStore
 from langchain_classic.schema import BaseMessage
 from langgraph.graph import add_messages
@@ -9,7 +9,7 @@ def merge_lists(left: list | None, right: list | None) -> list:
 
 class Task(TypedDict):
     description: str
-    type: str
+    type: Literal["account_agent", "transaction_agent", "knowledge_agent"]
 
 class BankingState(TypedDict, total=False):
     question: str

@@ -19,7 +19,7 @@ def distribute_tasks(state: BankingState):
 
     send_commands = []
     for task in tasks:
-        task_type = task.get("type", "general")
+        task_type = getattr(task, "type", "general")
 
         if task_type == "account":
             send_commands.append(Send("account_agent", {"tasks": task}))

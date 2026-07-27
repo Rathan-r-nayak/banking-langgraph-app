@@ -7,7 +7,7 @@ from urllib3.exceptions import InsecureRequestWarning
 from langchain_openai import AzureOpenAIEmbeddings, ChatOpenAI
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 # Retrieve the key from environment variables
 API_KEY = os.getenv("TCS_GENAI_API_KEY") # Ensure this matches your .env file

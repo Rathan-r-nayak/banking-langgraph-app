@@ -38,18 +38,22 @@ from Utils.Logger import get_logger
 
 logger = get_logger("WORKER_NODE")
 
-async def worker_node_function(state: WorkerState):
-    task = state["task"]
+def worker_node_function(state: WorkerState):
+    tasks = state.get("tasks", [])
+    if not tasks:
+        raise ValueError("No tasks found in state to process!")
+    
+    task = tasks[0]
     logger.info(f"⚙️ WORKER STARTED: Executing Task -> {task.task_id}: {task.description}")
     
     try:
         logger.info(f"🔌 Connecting to FastMCP Server at {FASTMCP_SSE_URL}...")
 
-        async with sse_client(FASTMCP_SSE_URL) as streams:
-            async with ClientSession(streams[0], streams[1]) as session:
-                await session.initialize()
+        with sse_client(FASTMCP_SSE_URL) as streams:
+            with ClientSession(streams[0], streams[1]) as session:
+                session.initialize()
                 
-                banking_tools = await load_mcp_tools(session=session)
+                banking_tools = load_mcp_tools(session=session)
                 logger.info(f"✅ Successfully loaded {len(banking_tools)} tools.")
                 
                 react_worker_graph = create_react_agent(
@@ -64,7 +68,7 @@ async def worker_node_function(state: WorkerState):
                     ]
                 }
                 
-                result = await react_worker_graph.ainvoke(worker_input)
+                result = react_worker_graph.ainvoke(worker_input)
                 
         
                 final_answer = result["messages"][-1].content

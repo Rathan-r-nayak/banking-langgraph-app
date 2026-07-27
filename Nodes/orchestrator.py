@@ -7,16 +7,21 @@ from Utils.Logger import get_logger
 from Config.llm_config import primary_llm
 from Config.llm_config import fast_llm
 
-
 logger = get_logger("ORCHESTRATOR")
 
+# 1. Update the System Prompt to act as a routing directory
 ORCHESTRATOR_SYSTEM_PROMPT = """You are the Lead Orchestrator for a secure Banking Assistant.
-Your job is to analyze the user's request and break it down into independent, parallelizable tasks.
+Your job is to analyze the user's request, break it down into independent tasks, and assign EACH task to the correct specialized agent.
+
+AVAILABLE AGENTS:
+- 'account_agent': Assign here for checking account balances, fetching account details, opening new accounts, and processing direct deposits or withdrawals.
+- 'transaction_agent': Assign here for transferring money between accounts or sending money to other people.
+- 'knowledge_agent': Assign here for general inquiries, banking policies, interest rates, loans, or FAQs.
 
 Rules:
-1. If the user asks for multiple distinct things (e.g., "What is my account balance and what are your current mortgage rates?"), create separate tasks for each.
-2. Make the task descriptions highly specific so a downstream worker agent knows exactly what tool to use or what information to retrieve.
-3. If the query requires a single action, output a list with exactly one task.
+1. Break down multi-part requests into separate tasks (e.g., "What is my balance and what are mortgage rates?" becomes one task for account_agent and one for knowledge_agent).
+2. Make the task descriptions highly specific so the downstream agent knows exactly what tool to use.
+3. You MUST assign one of the exact agent names listed above to handle the task.
 """
 
 def orchestrator_node(state: banking_state):
@@ -44,6 +49,11 @@ def orchestrator_node(state: banking_state):
         
     except Exception as e:
         logger.error(f"Orchestrator failed to generate plan: {e}")
-        # Failsafe: Create a single task containing the raw question
-        fallback_task = Task(task_id="fallback_1", description=question)
+        # Failsafe: Ensure the fallback task explicitly names an agent
+        fallback_task = Task(
+            task_id="fallback_1", 
+            description=question,
+            objective="Handle general fallback query",
+            agent="knowledge_agent" # or "type='knowledge_agent'" depending on your Pydantic schema
+        )
         return {"tasks": [fallback_task]}

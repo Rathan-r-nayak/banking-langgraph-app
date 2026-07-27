@@ -46,7 +46,7 @@ from main import build_graph
 async def run_banking_agent():
     """Starts the LangGraph app, connects to FastMCP, and attaches SQLite persistence + LTM store."""
     
-    MCP_SERVER_URL = "http://localhost:8000/sse" 
+    MCP_SERVER_URL = "http://localhost:8000/mcp/sse" 
     
     print("🔌 Connecting to FastMCP Server...")
     

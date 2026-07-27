@@ -1,8 +1,8 @@
 from State.banking_state import BankingState
 from langgraph.store.memory import InMemoryStore
+from langchain_core.runnables import RunnableConfig
 
-
-def recall_node(state: BankingState, config: dict, store: InMemoryStore):
+def recall_node(state: dict, config: RunnableConfig, store):
     """Fetches memories from the Store and injects them into the State."""
     
     # Get the user ID from the config (passed in from Streamlit)

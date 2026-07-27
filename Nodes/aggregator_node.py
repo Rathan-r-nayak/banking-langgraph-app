@@ -1,7 +1,7 @@
 from State.banking_state import BankingState
 from Utils.Logger import get_logger
 from langchain_core.prompts import ChatPromptTemplate
-from Config.llm_config import primary_llm
+from Config.llm_config import primary_llm, fast_llm
 from langchain.messages import AIMessage
 
 
@@ -38,7 +38,7 @@ def aggregator_node(state: BankingState):
         ("system", AGGREGATOR_SYSTEM_PROMPT),
         ("human", "Original User Query: {question}\n\nInternal Data Gathered:\n{worker_data}")
     ])
-    chain = prompt | primary_llm
+    chain = prompt | fast_llm
     
     try:
         response = chain.invoke({

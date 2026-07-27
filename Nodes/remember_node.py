@@ -3,10 +3,12 @@ import uuid
 from langchain_ollama import ChatOllama
 from langchain_core.messages import SystemMessage, HumanMessage
 from langgraph.store.memory import InMemoryStore
-
+from Config.llm_config import fast_llm
 from State.banking_state import BankingState
+from langchain_core.runnables import RunnableConfig
 
-def remember_node(state: BankingState, config: dict, store: InMemoryStore):
+# Update the function signature from config: dict -> config: RunnableConfig
+def remember_node(state: dict, config: RunnableConfig, store):
     """Uses Ollama to intelligently extract long-term banking facts from the conversation."""
     user_id = config["configurable"].get("user_id", "default_user")
     namespace = ("user", user_id, "facts")
@@ -21,11 +23,7 @@ def remember_node(state: BankingState, config: dict, store: InMemoryStore):
     
     # Initialize your local Ollama model
     # (Using your local Qwen Coder model since it excels at JSON parsing)
-    llm = ChatOllama(
-        model="qwen-2.5.1-coder-it:latest", 
-        temperature=0
-    )
-    
+   
     extraction_prompt = f"""Analyze the conversation below. Extract any durable, long-term personal facts about the user (e.g., salary, financial goals, preferred accounts, risk appetite, or recurring financial constraints) that would be useful to remember for future banking sessions.
 
     If there are no new facts worth remembering, return an empty JSON array: []
@@ -44,7 +42,7 @@ def remember_node(state: BankingState, config: dict, store: InMemoryStore):
 
     try:
         # Call the local LLM
-        response = llm.invoke([
+        response = fast_llm.invoke([
             SystemMessage(content="You are a precise data extraction assistant. You output strictly valid JSON."),
             HumanMessage(content=extraction_prompt)
         ])

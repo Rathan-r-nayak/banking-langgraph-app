@@ -4,7 +4,7 @@ from langchain_core.messages import SystemMessage
 from langgraph.prebuilt import ToolNode, tools_condition
 
 from State.banking_state import BankingState
-
+from Config.llm_config import fast_llm
 
 ACCOUNT_SYSTEM_PROMPT = """You are Secure Bank's Account Specialist.
 Your job is to assist customers with account management tasks ONLY.
@@ -22,7 +22,7 @@ Rules:
 
 
 
-def get_account_agent_nodes(all_mcp_tools: list[Any], model_name: str = "gpt-4o-mini"):
+def get_account_agent_nodes(all_mcp_tools: list[Any]):
     """
     Returns the reasoning node, the tool execution node, and the routing condition.
     """
@@ -40,8 +40,8 @@ def get_account_agent_nodes(all_mcp_tools: list[Any], model_name: str = "gpt-4o-
     account_tools = [t for t in all_mcp_tools if t.name in ACCOUNT_TOOL_NAMES]
     
     # 2. Initialize LLM and bind the filtered tools
-    llm = ChatOpenAI(model=model_name, temperature=0)
-    llm_with_tools = llm.bind_tools(account_tools)
+
+    llm_with_tools = fast_llm.bind_tools(account_tools)
     
     # 3. Define the Reasoning Node
     def account_agent_node(state: BankingState):

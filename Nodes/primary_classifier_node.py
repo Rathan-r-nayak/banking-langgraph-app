@@ -3,6 +3,7 @@ from langchain_core.prompts import ChatPromptTemplate
 
 from State.banking_state import BankingState
 from Config.llm_config import primary_llm
+from Config.llm_config import fast_llm
 from Schema.primary_classifier import PrimaryClassifierDecision
 
 TRIAGE_SYSTEM_PROMPT = """You are the first line of defense for a secure Banking Assistant.
@@ -18,7 +19,7 @@ from Utils.Logger import get_logger
 logger = get_logger("Primary Classifier")
 
 def triage_router(state: BankingState):
-    structured_llm = primary_llm.with_structured_output(PrimaryClassifierDecision)
+    structured_llm = fast_llm.with_structured_output(PrimaryClassifierDecision)
 
     question = state.get("question", "")
     logger.info(f"🗣️ USER REQ : {question}")

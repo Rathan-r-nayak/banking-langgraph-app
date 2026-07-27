@@ -1,7 +1,7 @@
 from langchain.messages import HumanMessage, SystemMessage
 from langgraph.prebuilt import create_react_agent
 from mcp import ClientSession
-
+from Config.llm_config import fast_llm
 from State.banking_state import WorkerState
 from Config.llm_config import primary_llm
 from Utils.mcp_client import fetch_mcp_tools 
@@ -53,7 +53,7 @@ async def worker_node_function(state: WorkerState):
                 logger.info(f"✅ Successfully loaded {len(banking_tools)} tools.")
                 
                 react_worker_graph = create_react_agent(
-                    model=primary_llm,
+                    model=fast_llm,
                     tools=banking_tools
                 )
                 

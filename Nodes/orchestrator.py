@@ -2,8 +2,10 @@ from langchain_core.prompts import ChatPromptTemplate
 
 from State import banking_state
 from Schema.task import Task, TaskPlan
+from Utils.Helpers import format_chat_history
 from Utils.Logger import get_logger
 from Config.llm_config import primary_llm
+from Config.llm_config import fast_llm
 
 
 logger = get_logger("ORCHESTRATOR")
@@ -21,7 +23,10 @@ def orchestrator_node(state: banking_state):
     logger.info("--- 🧠 RUNNING ORCHESTRATOR: PLANNING TASKS ---")
     question = state.get("question", "")
     
-    structured_llm = primary_llm.with_structured_output(TaskPlan)
+    raw_messages = state.get("messages", [])
+    chat_history_text = format_chat_history(raw_messages[:-1])
+    
+    structured_llm = fast_llm.with_structured_output(TaskPlan)
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", ORCHESTRATOR_SYSTEM_PROMPT),

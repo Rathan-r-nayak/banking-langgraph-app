@@ -4,6 +4,9 @@ from langchain_core.messages import SystemMessage
 from langgraph.prebuilt import ToolNode, tools_condition
 from State.banking_state import BankingState
 from Config.llm_config import fast_llm
+from Utils.Logger import get_logger
+
+logger = get_logger("KNOWLEDGE_AGENT")
 
 KNOWLEDGE_SYSTEM_PROMPT = """You are Secure Bank's Knowledge & Policy Specialist.
 Your role is to answer complex queries regarding bank policies, corporate guidelines, loan eligibility, and government incentive schemes (e.g., PMVBRY).
@@ -30,12 +33,14 @@ def get_knowledge_agent_nodes(all_mcp_tools: list[Any]):
     }
     
     knowledge_tools = [t for t in all_mcp_tools if t.name in KNOWLEDGE_TOOL_NAMES]
+    logger.info(f"📚 Knowledge Agent initialized with {len(knowledge_tools)} tools.")
     
     # 2. Initialize LLM and bind the filtered tools
     llm_with_tools = fast_llm.bind_tools(knowledge_tools)
     
     # 3. Define the Reasoning Node
     def knowledge_agent_node(state: BankingState):
+        logger.info("--- 📚 RUNNING KNOWLEDGE AGENT ---")
         messages = state.get("messages", [])
         
         # Inject the system prompt if it's not already at the front
@@ -43,8 +48,18 @@ def get_knowledge_agent_nodes(all_mcp_tools: list[Any]):
             messages = [SystemMessage(content=KNOWLEDGE_SYSTEM_PROMPT)] + messages
             
         # The LLM reads the history and decides to either reply with text OR output a tool_call
-        response = llm_with_tools.invoke(messages)
-        return {"messages": [response]}
+        try:
+            response = llm_with_tools.invoke(messages)
+            if hasattr(response, "tool_calls") and response.tool_calls:
+                tool_names = [tc["name"] for tc in response.tool_calls]
+                logger.info(f"🛠️ Knowledge Agent requested tool call(s): {tool_names}")
+            else:
+                snippet = response.content[:100] if response.content else ""
+                logger.info(f"💬 Knowledge Agent generated response: '{snippet}...'")
+            return {"messages": [response]}
+        except Exception as e:
+            logger.error(f"❌ Knowledge Agent execution failed: {e}")
+            raise e
 
     # 4. Define the Execution Node
     knowledge_tools_node = ToolNode(knowledge_tools)

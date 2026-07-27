@@ -6,6 +6,7 @@ from langchain_ollama import ChatOllama
 from urllib3.exceptions import InsecureRequestWarning
 from langchain_openai import AzureOpenAIEmbeddings, ChatOpenAI
 from dotenv import load_dotenv
+from langchain_google_genai import ChatGoogleGenerativeAI
 
 load_dotenv(override=True)
 
@@ -39,6 +40,9 @@ BASE_URL = "https://genailab.tcs.in"
 # 3. LLM INITIALIZATIONS
 # ==========================================
 
+fast_llm = ChatGoogleGenerativeAI(model='models/gemini-2.5-flash', temperature=0)
+
+
 # PRIMARY LLM: Core agent tasks
 primary_llm = ChatOpenAI(
     base_url=BASE_URL,
@@ -54,13 +58,13 @@ primary_llm = ChatOpenAI(
 # )
 
 # FAST LLM: For Routing, Classification, and Summarization
-fast_llm = ChatOpenAI(
-    base_url=BASE_URL,
-    model="azure/genailab-maas-gpt-4o-mini", 
-    api_key=API_KEY,
-    http_client=client,
-    temperature=0
-)
+# fast_llm = ChatOpenAI(
+#     base_url=BASE_URL,
+#     model="azure/genailab-maas-gpt-4o-mini", 
+#     api_key=API_KEY,
+#     http_client=client,
+#     temperature=0
+# )
 
 # REASONING LLM: Specifically for your Orchestrator node
 reasoning_llm = ChatOpenAI(

@@ -19,9 +19,14 @@ class BankingState(TypedDict, total=False):
     is_safe: bool
     requires_workflow: bool
     documents: list[dict]
-    is_sufficient: bool
+
     tasks: list[Task]
     worker_responses: Annotated[list[str], merge_lists]
+
+    is_sufficient: bool
+    relevance_score: str  # Will hold "yes" or "no"
+    knowledge_retries: int
+
     generation: str
 
 class WorkerState(TypedDict):

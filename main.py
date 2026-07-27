@@ -1,6 +1,8 @@
+from Edges.knowledge_eval_edge import check_relevance
 from Nodes.guardrail_node import guardrail_node
 from Edges.guardrail_edge import guardrail_edge
 from Edges.route_transaction_tools import route_transaction_tools
+from Nodes.knowledge_eval_node import evaluate_node, rewrite_node
 from Nodes.recall_node import recall_node
 from Nodes.remember_node import remember_node
 from Nodes.account_agent import get_account_agent_nodes
@@ -40,6 +42,8 @@ def build_graph(all_mcp_tools, checkpointer=None, ltm_store=None):
     workflow.add_node("safe_tools_node", safe_tools_node)
     workflow.add_node("sensitive_tools_node", sensitive_tools_node)
 
+    workflow.add_node("evaluate_node", evaluate_node)
+    workflow.add_node("rewrite_node", rewrite_node)
     workflow.add_node("knowledge_agent", knowledge_agent)
     workflow.add_node("knowledge_tools", knowledge_tools_node)
 
@@ -107,6 +111,16 @@ def build_graph(all_mcp_tools, checkpointer=None, ltm_store=None):
             END: "aggregator" 
         }
     )
+    workflow.add_edge("knowledge_tools", "evaluate_node")
+    workflow.add_conditional_edges(
+        "evaluate_node", 
+        check_relevance,
+        {
+            "knowledge_agent": "knowledge_agent",
+            "rewrite_node": "rewrite_node"
+        }
+    )
+    workflow.add_edge("rewrite_node", "knowledge_agent")
     
     # ReAct Loops
     workflow.add_edge("account_tools", "account_agent")

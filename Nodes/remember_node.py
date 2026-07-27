@@ -3,21 +3,26 @@ import uuid
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 from Config.llm_config import fast_llm
+from Utils.Logger import get_logger
+
+logger = get_logger("REMEMBER_NODE")
 
 def remember_node(state: dict, config: RunnableConfig):
     """Uses Ollama/fast_llm to intelligently extract long-term banking facts from the conversation."""
+    logger.info("--- 💾 RUNNING REMEMBER NODE (LTM EXTRACTION) ---")
     user_id = config.get("configurable", {}).get("user_id", "default_user")
     namespace = ("user", user_id, "facts")
     
     # Safely retrieve store from config if injected by LangGraph
     store = config.get("configurable", {}).get("store")
     if not store:
-        # If store isn't available in config, just return safely
+        logger.warning(f"⚠️ Store not found in config for user '{user_id}'. Skipping LTM saving.")
         return {}
     
     # Grab the recent conversation history (last few messages for context)
     messages = state.get("messages", [])
     if not messages:
+        logger.info("ℹ️ No messages present in state for LTM extraction.")
         return {}
     
     # Format the last couple of messages into a transcript block for the LLM
@@ -61,6 +66,7 @@ def remember_node(state: dict, config: RunnableConfig):
         facts_list = json.loads(content)
         
         # Save each extracted fact into the LangGraph Store
+        saved_count = 0
         for item in facts_list:
             fact_text = item.get("fact")
             if fact_text:
@@ -69,9 +75,13 @@ def remember_node(state: dict, config: RunnableConfig):
                     str(uuid.uuid4()), 
                     {"fact": fact_text}
                 )
-                print(f"💾 [LTM Saved] -> {fact_text}")
+                logger.info(f"💾 [LTM Saved] -> {fact_text}")
+                saved_count += 1
+                
+        if saved_count == 0:
+            logger.info("ℹ️ No new long-term facts extracted from conversation.")
                 
     except Exception as e:
-        print(f"❌ Failed to extract memory via LLM: {e}")
+        logger.error(f"❌ Failed to extract memory via LLM: {e}")
         
     return {}

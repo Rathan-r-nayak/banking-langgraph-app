@@ -1,17 +1,13 @@
-from typing import List, Literal
+# Schema/task.py
 from pydantic import BaseModel, Field
+from typing import List, Literal
 
 class Task(BaseModel):
-    task_id: str = Field(description="A unique identifier for the task (e.g., 'task_1', 'task_2').")
-    objective: str = Field(
-        description="One sentence describing exactly what this worker must extract or generate based on the documents."
-    )
-    description: str = Field(description="A specific, actionable instruction for the worker agent to execute. Do not combine multiple actions into one task.")
-    
-    # ADD THIS LINE: This forces the LLM to choose the correct agent
-    agent: Literal["account_agent", "transaction_agent", "knowledge_agent"] = Field(
-        description="The specialized agent assigned to execute this task."
-    )
+    task_id: str = Field(description="A unique identifier for the task (e.g., 'task_1')")
+    description: str = Field(description="Specific instruction for the worker")
+    tool_type: Literal["safe", "sensitive", "rag"] = Field(description="The type of tools needed")
 
-class TaskPlan(BaseModel):
-    tasks: List[Task] = Field(description="A list of distinct, parallel tasks required to answer the user's overall request.")
+class OrchestratorPlan(BaseModel):
+    is_workflow_complete: bool = Field(description="True if the user's request is fully answered")
+    tasks: List[Task] = Field(default_factory=list, description="List of tasks for the workers to execute in parallel")
+    final_answer: str = Field(default="", description="The final answer to the user if workflow is complete")

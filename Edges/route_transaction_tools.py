@@ -20,4 +20,4 @@ def route_transaction_tools(state: BankingState):
         return "sensitive_tools" # This path will be paused!
     else:
         logger.info(f"⚡ ROUTING: Safe tool '{tool_name}' requested. Routing to safe_tools.")
-        return "safe_tools"      # This path runs instantly
+        return "safe_tools"      # This path runs instantlysensitive_tools

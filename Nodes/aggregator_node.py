@@ -1,9 +1,8 @@
 from State.banking_state import BankingState
 from Utils.Logger import get_logger
 from langchain_core.prompts import ChatPromptTemplate
-from Config.llm_config import primary_llm, fast_llm
-from langchain.messages import AIMessage
-
+from Config.llm_config import fast_llm
+from langchain_core.messages import AIMessage
 
 logger = get_logger("AGGREGATOR")
 
@@ -20,24 +19,28 @@ Rules:
 
 def aggregator_node(state: BankingState):
     question = state.get("question", "")
-    # The state reducer (operator.add) has combined all parallel outputs into this list
     worker_responses_list = state.get("worker_responses", [])
     
     combined_worker_data = "\n\n".join(worker_responses_list)
     
     if not combined_worker_data:
-        logger.warning("No worker responses found. Returning default error.")
+        logger.warning("⚠️ No worker responses found. Returning default error to user.")
         error_msg = "I'm sorry, but I was unable to process your request at this time."
+        
+        # Log the exact error output provided to user
+        logger.info(f"📤 [AGGREGATOR OUTPUT] -> {error_msg}")
         return {
             "generation": error_msg,
             "messages": [AIMessage(content=error_msg)]
         }
-    logger.info(f"The response of the worker is {combined_worker_data}")
-    prompt = ChatPromptTemplate.from_messages(AGGREGATOR_SYSTEM_PROMPT)
+
+    logger.info(f"📥 [AGGREGATOR INPUT] Aggregating {len(worker_responses_list)} worker result(s).")
+    
     prompt = ChatPromptTemplate.from_messages([
         ("system", AGGREGATOR_SYSTEM_PROMPT),
         ("human", "Original User Query: {question}\n\nInternal Data Gathered:\n{worker_data}")
     ])
+    
     chain = prompt | fast_llm
     
     try:
@@ -47,15 +50,20 @@ def aggregator_node(state: BankingState):
         })
         
         final_answer = response.content
+        
+        # 🌟 Log the exact final output being delivered to the state
         logger.info("✅ Aggregator successfully generated the final response.")
+        logger.info(f"📤 [AGGREGATOR OUTPUT] -> \n{final_answer}")
         
         return {
             "generation": final_answer,
             "messages": [AIMessage(content=final_answer)]
         }
     except Exception as e:
-        logger.error(f"Aggregator failed: {e}")
+        logger.error(f"❌ Aggregator failed during synthesis: {e}")
         fallback = "An error occurred while formatting your final response."
+        logger.info(f"📤 [AGGREGATOR FALLBACK OUTPUT] -> {fallback}")
+        
         return {
             "generation": fallback,
             "messages": [AIMessage(content=fallback)]

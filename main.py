@@ -1,21 +1,20 @@
-from Edges.knowledge_eval_edge import check_relevance
-from Nodes.guardrail_node import guardrail_node
-from Edges.guardrail_edge import guardrail_edge
-from Edges.route_transaction_tools import route_transaction_tools
-from Nodes.knowledge_eval_node import evaluate_node, rewrite_node
-from Nodes.recall_node import recall_node
-from Nodes.remember_node import remember_node
-from Nodes.account_agent import get_account_agent_nodes
-from Nodes.knowledge_agent import get_knowledge_agent_nodes
-from Nodes.transaction_agent import get_transaction_agent_nodes
-from Edges.distribute_tasks_edge import distribute_tasks
-from Edges.primary_classifier_route_edge import route_triage
-from Nodes.aggregator_node import aggregator_node
-from Nodes.orchestrator import orchestrator_node
-from Nodes.primary_classifier_node import triage_router
-from Nodes.worker import worker_node_function
-from State.banking_state import BankingState
 from langgraph.graph import StateGraph, START, END
+
+# --- State Imports ---
+from Nodes.recall_node import recall_node
+from State.banking_state import BankingState
+
+# --- Node Imports ---
+from Nodes.guardrail_node import guardrail_node
+from Nodes.primary_classifier_node import triage_router
+from Nodes.orchestrator import orchestrator_node
+from Nodes.aggregator_node import aggregator_node
+from Graph.worker_sub_graph import get_worker_subgraph
+
+# --- Edge Imports ---
+from Edges.guardrail_edge import guardrail_edge
+from Edges.primary_classifier_route_edge import route_triage
+from Edges.route_orchestration import orchestrator_router
 
 
 def build_graph(all_mcp_tools, checkpointer=None, ltm_store=None):
@@ -23,9 +22,10 @@ def build_graph(all_mcp_tools, checkpointer=None, ltm_store=None):
     Assembles and compiles the map-reduce banking agent.
     Pass your PostgreSQL or MemorySaver checkpointer here.
     """
-    account_agent, account_tools, account_tools_condition = get_account_agent_nodes(all_mcp_tools=all_mcp_tools)
-    transaction_agent, safe_tools_node, sensitive_tools_node = get_transaction_agent_nodes(all_mcp_tools)
-    knowledge_agent, knowledge_tools_node, knowledge_tools_condition = get_knowledge_agent_nodes(all_mcp_tools)
+    # account_agent, account_tools, account_tools_condition = get_account_agent_nodes(all_mcp_tools=all_mcp_tools)
+    # transaction_agent, safe_tools_node, sensitive_tools_node = get_transaction_agent_nodes(all_mcp_tools)
+    # knowledge_agent, knowledge_tools_node, knowledge_tools_condition = get_knowledge_agent_nodes(all_mcp_tools)
+    worker_subgraph = get_worker_subgraph(all_mcp_tools)
 
     workflow = StateGraph(BankingState)
 
@@ -34,22 +34,16 @@ def build_graph(all_mcp_tools, checkpointer=None, ltm_store=None):
     workflow.add_node("guardrail_node", guardrail_node)
     workflow.add_node("triage_router", triage_router)
     workflow.add_node("orchestrator", orchestrator_node)
-
-    workflow.add_node("account_agent", account_agent)
-    workflow.add_node("account_tools", account_tools)
-
-    workflow.add_node("transaction_agent", transaction_agent)
-    workflow.add_node("safe_tools_node", safe_tools_node)
-    workflow.add_node("sensitive_tools_node", sensitive_tools_node)
-
-    workflow.add_node("evaluate_node", evaluate_node)
-    workflow.add_node("rewrite_node", rewrite_node)
-    workflow.add_node("knowledge_agent", knowledge_agent)
-    workflow.add_node("knowledge_tools", knowledge_tools_node)
-
-    workflow.add_node("worker_node", worker_node_function)
+    # 🌟 The entire sub-graph acts as one node
+    workflow.add_node("worker_subgraph", worker_subgraph) 
     workflow.add_node("aggregator", aggregator_node)
-    workflow.add_node("remember_node", remember_node)
+    
+    # workflow.add_node("retrieve_node", retrieve_node)
+    # workflow.add_node("grade_docs_node", grade_docs_node)
+    # workflow.add_node("rewrite_node", rewrite_node)
+    # workflow.add_node("rag_format_response_node", rag_format_response_node)
+
+
     
     # 2. Add Edges & Conditional Routing
     workflow.add_edge(START, "recall_node")
@@ -72,72 +66,19 @@ def build_graph(all_mcp_tools, checkpointer=None, ltm_store=None):
             END: END
         }
     )
+
     
     workflow.add_conditional_edges(
         "orchestrator", 
-        distribute_tasks,
+        orchestrator_router, 
         {
-            "account_agent": "account_agent",
-            "transaction_agent": "transaction_agent",
-            "knowledge_agent": "knowledge_agent",
-            "worker_node": "worker_node"
-        }
-    )
-
-    workflow.add_conditional_edges(
-        "account_agent",
-        account_tools_condition,
-        {
-            "tools": "account_tools",
-            END: "aggregator" 
-        }
-    )
-
-    workflow.add_conditional_edges(
-        "transaction_agent",
-        route_transaction_tools,
-        {
-            "safe_tools": "safe_tools_node",
-            "sensitive_tools": "sensitive_tools_node",
+            "worker_subgraph": "worker_subgraph",
             "aggregator": "aggregator"
         }
     )
 
-    workflow.add_conditional_edges(
-        "knowledge_agent",
-        knowledge_tools_condition,
-        {
-            "tools": "knowledge_tools",
-            END: "aggregator" 
-        }
-    )
-    workflow.add_edge("knowledge_tools", "evaluate_node")
-    workflow.add_conditional_edges(
-        "evaluate_node", 
-        check_relevance,
-        {
-            "knowledge_agent": "knowledge_agent",
-            "rewrite_node": "rewrite_node"
-        }
-    )
-    workflow.add_edge("rewrite_node", "knowledge_agent")
-    
-    # ReAct Loops
-    workflow.add_edge("account_tools", "account_agent")
-    workflow.add_edge("safe_tools_node", "transaction_agent")
-    workflow.add_edge("sensitive_tools_node", "transaction_agent")
-    workflow.add_edge("knowledge_tools", "knowledge_agent")
-    
-    workflow.add_edge("worker_node", "aggregator")
-    workflow.add_edge("aggregator", "remember_node")
-    workflow.add_edge("remember_node", END)
-    
-    # 3. Compilation with Human-in-the-Loop Interrupt
-    
-    app = workflow.compile(
-        checkpointer=checkpointer,
-        store=ltm_store,  # <--- Pass your SqliteKeyValueStore instance here!
-        interrupt_before=["sensitive_tools_node"]
-    )
-    
+    workflow.add_edge("worker_subgraph", "orchestrator")
+    workflow.add_edge("aggregator", END)
+
+    app = workflow.compile(checkpointer=checkpointer, store=ltm_store)
     return app

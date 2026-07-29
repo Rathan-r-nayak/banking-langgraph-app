@@ -63,3 +63,7 @@ uvicorn server:app --host 127.0.0.1 --port 8080 --reload
 ```
 uv run streamlit run ui.py
 ```
+- run phoenix
+```
+python -m phoenix.server.main
+```

@@ -1,4 +1,3 @@
-# Edges/route_orchestration.py
 from langgraph.constants import Send
 from State.banking_state import BankingState
 
@@ -12,6 +11,11 @@ def orchestrator_router(state: BankingState):
         
     tasks = state.get("tasks", [])
     
-    # 🌟 Spawns multiple 'worker_subgraph' nodes concurrently!
-    # It passes a specialized WorkerState to each one.
-    return [Send("worker_subgraph", {"task": task}) for task in tasks]
+    # 🌟 FIX: Inject an empty messages list so the worker's reducer doesn't crash!
+    return [
+        Send("worker_subgraph", {
+            "task": task,
+            "messages": []  # <--- THIS IS THE MAGIC FIX
+        }) 
+        for task in tasks
+    ]

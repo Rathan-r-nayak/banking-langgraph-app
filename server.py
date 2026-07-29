@@ -1,16 +1,22 @@
 import asyncio
 import json
+import os
+import shutil
+import tempfile
+import traceback
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request
-from fastapi.responses import StreamingResponse
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from datetime import datetime
+from typing import TypedDict
 
-from mcp.client.sse import sse_client
-from mcp.client.session import ClientSession
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from langchain_core.messages import HumanMessage
 from langchain_mcp_adapters.tools import load_mcp_tools
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-from langchain_core.messages import HumanMessage
+from mcp.client.session import ClientSession
+from mcp.client.sse import sse_client
+from pydantic import BaseModel
 
 # Import project modules
 from main import build_graph
@@ -18,12 +24,35 @@ from Utils.Logger import get_logger
 
 logger = get_logger("SERVER_API")
 
+# phoenix implementation
+import phoenix as px
+from openinference.instrumentation.langchain import LangChainInstrumentor
+from opentelemetry import trace as trace_api
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk import trace as trace_sdk
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+
 try:
     from Utils.database_manager import ltm_store
 except ImportError:
     ltm_store = None
 
-# Global state for MCP
+logger.info("🔥 Starting Arize Phoenix for telemetry...")
+# px.launch_app()  # Launches local Phoenix dashboard on http://localhost:6006
+
+# Configure OpenTelemetry to export spans to the Phoenix server
+endpoint = "http://127.0.0.1:6006/v1/traces"
+tracer_provider = trace_sdk.TracerProvider()
+tracer_provider.add_span_processor(SimpleSpanProcessor(OTLPSpanExporter(endpoint)))
+trace_api.set_tracer_provider(tracer_provider)
+
+# Instrument LangChain/LangGraph under the hood
+LangChainInstrumentor().instrument()
+logger.info("✅ LangChain Instrumentor active. Traces will appear in Phoenix.")
+
+# =============================================================================
+# GLOBAL STATE & FASTAPI STARTUP / LIFESPAN
+# =============================================================================
 mcp_session = None
 mcp_tools = []
 MCP_SERVER_URL = "http://localhost:8000/mcp/sse"
@@ -46,6 +75,7 @@ async def lifespan(app: FastAPI):
         yield
     logger.info("🛑 Disconnected from FastMCP.")
 
+# 🌟 CRITICAL FIX: Pass the lifespan function into FastAPI here
 app = FastAPI(title="Banking Agent API", lifespan=lifespan)
 
 app.add_middleware(
@@ -56,89 +86,236 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-class ChatRequest(BaseModel):
-    thread_id: str
+# =============================================================================
+# DATABASE & USERS SETUP
+# =============================================================================
+USERS_DB: dict[str, dict] = {
+    "admin1": {"password": "admin123", "role": "ADMIN"},
+    "cust1":  {"password": "cust123",  "role": "CUSTOMER"},
+    "rathan":  {"password": "1234",  "role": "CUSTOMER"},
+}
+
+UPLOAD_DIR = "uploaded_docs"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+METADATA_DIR = "metadata"
+os.makedirs(METADATA_DIR, exist_ok=True)
+THREADS_METADATA_FILE = os.path.join(METADATA_DIR, "threads.json")
+DOCS_METADATA_FILE = os.path.join(METADATA_DIR, "docs.json")
+
+def _read_docs_metadata() -> list[dict]:
+    if not os.path.exists(DOCS_METADATA_FILE):
+        _write_docs_metadata([])   # first run - create an empty metadata file
+        return []
+    with open(DOCS_METADATA_FILE, "r") as f:
+        try:
+            return json.load(f)
+        except json.JSONDecodeError:
+            return []
+
+def _write_docs_metadata(docs: list[dict]) -> None:
+    with open(DOCS_METADATA_FILE, "w") as f:
+        json.dump(docs, f, indent=2)
+
+def _read_threads_metadata() -> dict[str, dict]:
+    if not os.path.exists(THREADS_METADATA_FILE):
+        _write_threads_metadata({})   # first run - create an empty metadata file
+        return {}
+    with open(THREADS_METADATA_FILE, "r") as f:
+        try:
+            return json.load(f)
+        except json.JSONDecodeError:
+            return {}
+
+def _write_threads_metadata(threads: dict[str, dict]) -> None:
+    with open(THREADS_METADATA_FILE, "w") as f:
+        json.dump(threads, f, indent=2)
+
+# =============================================================================
+# MODELS
+# =============================================================================
+class LoginRequest(BaseModel):
     user_id: str
-    message: str | None = None
-    action: str | None = None  # "approve" or "reject" for HITL
+    password: str
+
+class LoginResponse(BaseModel):
+    user_id: str
+    role: str
+
+class ThreadSummary(TypedDict):
+    thread_id: str
+    title: str
+    created_at: str
+
+class DocumentInfo(TypedDict):
+    filename: str
+    uploaded_by: str
+    uploaded_at: str
+
+class UploadResponse(BaseModel):
+    filename: str
+    status: str
+    chunks_ingested: int | None = None
+
+# =============================================================================
+# ENDPOINTS
+# =============================================================================
+@app.post("/auth/login", response_model=LoginResponse)
+async def login(req: LoginRequest):
+    user = USERS_DB.get(req.user_id)
+    if not user or user["password"] != req.password:
+        raise HTTPException(status_code=401, detail="Invalid user_id or password")
+    return LoginResponse(user_id=req.user_id, role=user["role"])
 
 @app.post("/chat/stream")
-async def chat_stream(req: ChatRequest):
-    """Executes the graph and streams standard SSE tokens while logging the full response."""
-    
-    logger.info(f"💬 [INCOMING REQUEST] Thread: '{req.thread_id}' | User: '{req.user_id}' | Message: '{req.message}' | Action: '{req.action}'")
+async def chat_stream(
+    thread_id: str = Form(...),
+    user_id: str = Form(...),
+    message: str = Form(None),
+    action: str = Form(None),
+    image: UploadFile = File(None)
+):
+    """Executes the graph and streams standard SSE tokens using the stable messages mode."""
+
+    logger.info(f"💬 [INCOMING REQUEST] Thread: '{thread_id}' | User: '{user_id}' | Message: '{message}' | Action: '{action}'")
 
     async def generate():
-        full_streamed_response = []
+        image_path = None
         
-        async with AsyncSqliteSaver.from_conn_string("banking_checkpoints.db") as checkpointer:
-            graph = build_graph(all_mcp_tools=mcp_tools, checkpointer=checkpointer, ltm_store=ltm_store)
-            
-            thread_config = {"configurable": {"thread_id": req.thread_id, "user_id": req.user_id}}
-            
-            # Handle Human-in-the-Loop Resumes
-            if req.action == "approve":
-                inputs = None
-            elif req.action == "reject":
-                cancellation_msg = "Transaction cancelled by user."
-                logger.info(f"🛑 [STREAM END] Thread: '{req.thread_id}' | Output: {cancellation_msg}")
-                yield f"data: {cancellation_msg}\n\n"
-                return
-            else:
-                inputs = {
-                    "question": req.message,
-                    "worker_responses": [],
-                    "messages": [HumanMessage(content=req.message)]
-                }
+        # Save uploaded image to temp file for Vision Node
+        if image and image.filename:
+            logger.info(f"📸 Image uploaded: {image.filename}")
+            fd, temp_path = tempfile.mkstemp(suffix=f"_{image.filename}")
+            with os.fdopen(fd, 'wb') as f:
+                content = await image.read()
+                f.write(content)
+            image_path = temp_path
 
-            # Stream execution
-            try:
-                stream_target = graph.astream_events(inputs, config=thread_config, version="v2")
-                
-                async for event in stream_target:
-                    # Stream tokens from the aggregator node
-                    if event["event"] == "on_chat_model_stream":
-                        if event["metadata"].get("langgraph_node") == "aggregator":
-                            chunk = event["data"]["chunk"].content
-                            if chunk:
-                                full_streamed_response.append(chunk)
-                                chunk_clean = chunk.replace('\n', '\\n')
-                                yield f"data: {chunk_clean}\n\n"
-                
-                # Check if graph paused for Human-In-The-Loop
-                current_state = await graph.aget_state(thread_config)
-                if current_state.next and "sensitive_tools_node" in current_state.next:
-                    logger.info(f"⏸️ [STREAM INTERRUPTED] Thread: '{req.thread_id}' paused for HITL approval at 'sensitive_tools_node'.")
-                    yield f"data: __INTERRUPT__\n\n"
+        try:
+            async with AsyncSqliteSaver.from_conn_string("banking_checkpoints.db") as checkpointer:
+                # 🌟 Now mcp_tools will actually contain your server's tools!
+                graph = build_graph(all_mcp_tools=mcp_tools, checkpointer=checkpointer, ltm_store=ltm_store)
+                thread_config = {"configurable": {"thread_id": thread_id, "user_id": user_id}}
+
+                if action == "approve":
+                    inputs = None
+                elif action == "reject":
+                    cancellation_msg = "Transaction cancelled by user."
+                    logger.info(f"🛑 [STREAM END] Thread: '{thread_id}' | Output: {cancellation_msg}")
+                    yield f"data: {cancellation_msg}\n\n"
+                    return
                 else:
-                    # Log the full aggregated stream output
-                    final_text = "".join(full_streamed_response)
-                    logger.info(f"📢 [STREAM COMPLETE] Thread: '{req.thread_id}' | User: '{req.user_id}'\nFull Response Sent:\n{final_text}")
+                    inputs = {
+                        "question": message or "",
+                        "worker_responses": [],
+                        "messages": [HumanMessage(content=message)] if message else [],
+                        "image_path": image_path  # Pass the image path into State
+                    }
+                    if message:
+                        register_thread(thread_id, user_id, message)
 
-            except Exception as e:
-                logger.error(f"❌ [STREAM ERROR] Thread: '{req.thread_id}' failed: {e}")
-                yield f"data: System Error: {str(e)}\n\n"
+                # Stream the messages normally
+                async for msg, metadata in graph.astream(inputs, config=thread_config, stream_mode="messages"):
+                    node_name = metadata.get("langgraph_node")
+
+                    if msg.content and isinstance(msg.content, str):
+                        content_clean = msg.content.replace('\n', '\\n')
+
+                        if node_name == "worker_agent":
+                            yield f"event: thought\ndata: {content_clean}\n\n"
+                        elif node_name in ["aggregator", "output_guardrail", "triage_router"]:
+                            yield f"event: message\ndata: {content_clean}\n\n"
+
+                # Check if paused at security gate
+                state = await graph.aget_state(thread_config)
+                if len(state.next) > 0:
+                    yield f"event: message\ndata: __INTERRUPT__\n\n"
+
+        except Exception as e:
+            logger.error("❌ Stream Exception caught!")
+            traceback.print_exc()
+            yield f"event: error\ndata: An internal error occurred.\n\n"
+            
+        finally:
+            # Clean up the image file after generation completes
+            if image_path and os.path.exists(image_path):
+                os.remove(image_path)
+                logger.info(f"🗑️ Cleaned up temp image file: {image_path}")
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
-
 @app.get("/chat/history")
 async def get_history(thread_id: str):
-    """Fetches graph history so the frontend can render past messages."""
     async with AsyncSqliteSaver.from_conn_string("banking_checkpoints.db") as checkpointer:
         graph = build_graph(all_mcp_tools=[], checkpointer=checkpointer, ltm_store=ltm_store)
         state = await graph.aget_state({"configurable": {"thread_id": thread_id}})
-        
+
         if not state or not state.values:
             return {"messages": [], "is_paused": False}
-            
-        is_paused = bool(state.next and "sensitive_tools_node" in state.next)
-        
+
+        is_paused = len(state.next) > 0
+
         formatted_msgs = []
         for msg in state.values.get("messages", []):
             if getattr(msg, 'type', '') in ['human', 'ai'] and getattr(msg, 'content', ''):
                 if msg.type == 'ai' and getattr(msg, 'tool_calls', None):
                     continue
-                formatted_msgs.append({"role": "user" if msg.type == 'human' else "assistant", "content": msg.content})
-                
+
+                if msg.type == 'ai' and getattr(msg, 'name', '') == 'internal_worker':
+                    formatted_msgs.append({"role": "thought", "content": msg.content})
+                else:
+                    formatted_msgs.append({"role": "user" if msg.type == 'human' else "assistant", "content": msg.content})
+
         return {"messages": formatted_msgs, "is_paused": is_paused}
+
+@app.get("/chat/threads", response_model=list[ThreadSummary])
+async def list_threads(user_id: str):
+    user_threads = [
+        ThreadSummary(thread_id=tid, title=meta["title"], created_at=meta["created_at"])
+        for tid, meta in _read_threads_metadata().items()
+        if meta["user_id"] == user_id
+    ]
+    user_threads.sort(key=lambda t: t["created_at"], reverse=True)
+    return user_threads
+
+def register_thread(thread_id: str, user_id: str, first_message: str):
+    """Called the first time a thread_id is used so it shows up in the sidebar."""
+    threads = _read_threads_metadata()
+    if thread_id not in threads:
+        threads[thread_id] = {
+            "user_id": user_id,
+            "title": (first_message[:40] + "…") if len(first_message) > 40 else first_message,
+            "created_at": datetime.utcnow().isoformat(),
+        }
+        _write_threads_metadata(threads)
+
+@app.post("/admin/upload", response_model=UploadResponse)
+async def upload_document(
+    user_id: str = Form(...),
+    file: UploadFile = File(...),
+):
+    user = USERS_DB.get(user_id)
+    if not user or user["role"] != "ADMIN":
+        raise HTTPException(status_code=403, detail="Only ADMIN users can upload documents")
+
+    dest_path = os.path.join(UPLOAD_DIR, file.filename)
+    with open(dest_path, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+
+    # Note: RAG Pipeline ingestion logic should hook in here in the future
+    
+    docs = _read_docs_metadata()
+    docs.append({
+        "filename": file.filename,
+        "uploaded_by": user_id,
+        "uploaded_at": datetime.utcnow().isoformat(),
+    })
+    _write_docs_metadata(docs)
+
+    logger.info(f"📄 [UPLOAD] '{file.filename}' uploaded by admin '{user_id}'")
+    return UploadResponse(filename=file.filename, status="stored", chunks_ingested=None)
+
+@app.get("/admin/documents", response_model=list[DocumentInfo])
+async def list_documents():
+    docs = _read_docs_metadata()
+    return sorted(docs, key=lambda d: d["uploaded_at"], reverse=True)

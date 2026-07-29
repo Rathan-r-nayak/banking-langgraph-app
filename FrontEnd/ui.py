@@ -1,118 +1,123 @@
 import streamlit as st
-from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
-from langgraph.checkpoint.memory import MemorySaver
+import requests
 
-# Import your graph builder and tools
-from main import build_graph
+# 🌟 Point to the new FastAPI port (8080)
+FASTAPI_URL = "http://127.0.0.1:8080"
 
 st.set_page_config(page_title="Secure Banking AI", page_icon="🏦", layout="centered")
 
-# --- 1. Initialize LangGraph & Checkpointer ---
-# We use st.cache_resource so the graph compiles only once
-@st.cache_resource
-def init_graph():
-    # In production, replace MemorySaver with your PostgreSQL/SQLite checkpointer
-    checkpointer = MemorySaver()
-    # Pass your actual MCP tools and LTM store here
-    return build_graph(all_mcp_tools=[], checkpointer=checkpointer, ltm_store=None)
-
-app = init_graph()
-
-# --- 2. Session Setup ---
 if "thread_id" not in st.session_state:
     st.session_state.thread_id = "dev_session_001"
-
-# The config dictates which database thread LangGraph pulls from
-config = {"configurable": {"thread_id": st.session_state.thread_id, "user_id": "rathan"}}
-
-# --- 3. Render Chat History ---
-def render_history():
-    """Reads directly from LangGraph's state database to render the UI."""
-    state = app.get_state(config)
-    if not state.values:
-        return
-        
-    for msg in state.values.get("messages", []):
-        # Render Human Messages
-        if isinstance(msg, HumanMessage):
-            st.chat_message("user").write(msg.content)
-            
-        # Render AI Messages (Hide internal reasoning/tool calls from the user)
-        elif isinstance(msg, AIMessage):
-            if msg.content and not msg.tool_calls:
-                st.chat_message("assistant").write(msg.content)
+if "user_id" not in st.session_state:
+    st.session_state.user_id = "rathan"
 
 st.title("🏦 Secure Banking Orchestrator")
-render_history()
 
-# --- 4. Evaluate Graph State (The Gatekeeper) ---
-current_state = app.get_state(config)
-is_paused = len(current_state.next) > 0
+# --- 1. Fetch History from FastAPI ---
+def fetch_history():
+    try:
+        res = requests.get(f"{FASTAPI_URL}/chat/history?thread_id={st.session_state.thread_id}")
+        if res.status_code == 200:
+            return res.json()
+    except requests.exceptions.ConnectionError:
+        st.error("🔌 Cannot connect to FastAPI backend. Is it running?")
+    return {"messages": [], "is_paused": False}
 
-# If the graph is paused, we lock the chat input and display action buttons
+history_data = fetch_history()
+messages = history_data.get("messages", [])
+is_paused = history_data.get("is_paused", False)
+
+# --- Render Chat History ---
+for msg in messages:
+    if msg["role"] == "thought":
+        # Render historical thoughts in a collapsed expander so they don't clutter the screen
+        with st.expander("🧠 Agent Thoughts", expanded=False):
+            st.markdown(msg["content"])
+    else:
+        st.chat_message(msg["role"]).write(msg["content"])
+
+# --- 2. Evaluate Graph State (The Gatekeeper) ---
 if is_paused:
-    last_msg = current_state.values["messages"][-1]
+    st.error("🔒 **Action Pending Approval**")
+    st.write("A sensitive transaction or web search requires your authorization.")
     
-    # --- HITL SCENARIO A: Web Search Approval (RAG Subgraph) ---
-    if isinstance(last_msg, AIMessage) and "Would you like me to search the web?" in last_msg.content:
-        st.warning("🌐 **Web Search Authorization Required**")
-        st.write("Internal policies yielded no results. Permit external search?")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("✅ Yes, search the web", use_container_width=True):
-                # Inject the user's "Yes" into the state and resume the graph
-                app.update_state(config, {"messages": [HumanMessage(content="Yes")]})
-                app.invoke(None, config) # Trigger resume
-                st.rerun()
-        with col2:
-            if st.button("❌ No, use internal only", use_container_width=True):
-                # Inject "No" and resume
-                app.update_state(config, {"messages": [HumanMessage(content="No")]})
-                app.invoke(None, config)
-                st.rerun()
-                
-    # --- HITL SCENARIO B: Sensitive Tools (Worker Subgraph) ---
-    elif isinstance(last_msg, AIMessage) and last_msg.tool_calls:
-        st.error("🔒 **Sensitive Transaction Pending Approval**")
-        
-        # Display the pending parallel tool calls
-        for tool in last_msg.tool_calls:
-            st.info(f"**Action:** `{tool['name']}`\n\n**Payload:** `{tool['args']}`")
-            
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("✅ Approve Transaction", use_container_width=True):
-                # Resume execution; LangGraph will immediately execute the pending tools
-                app.invoke(None, config)
-                st.rerun()
-        with col2:
-            if st.button("❌ Cancel", use_container_width=True):
-                # Create rejection messages for every pending tool call
-                rejections = [
-                    ToolMessage(
-                        tool_call_id=tc["id"], 
-                        name=tc["name"], 
-                        content="SYSTEM: User rejected this transaction."
-                    )
-                    for tc in last_msg.tool_calls
-                ]
-                # Inject the failure directly into the tool node to safely collapse the execution
-                app.update_state(config, {"messages": rejections}, as_node="sensitive_tools_node")
-                app.invoke(None, config)
-                st.rerun()
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("✅ Approve", use_container_width=True):
+            requests.post(
+                f"{FASTAPI_URL}/chat/stream", 
+                json={"thread_id": st.session_state.thread_id, "user_id": st.session_state.user_id, "action": "approve"}
+            )
+            st.rerun()
+    with col2:
+        if st.button("❌ Reject", use_container_width=True):
+            requests.post(
+                f"{FASTAPI_URL}/chat/stream", 
+                json={"thread_id": st.session_state.thread_id, "user_id": st.session_state.user_id, "action": "reject"}
+            )
+            st.rerun()
 
-# --- 5. Standard Chat Input ---
-# Only display the input bar if the graph is currently idle
+# --- 3. Standard Chat Input (Streams the SSE response) ---
 else:
     if prompt := st.chat_input("Ask about policies or request a transaction..."):
         st.chat_message("user").write(prompt)
         
-        with st.spinner("Orchestrating workflow..."):
-            # We pass both 'question' for the State dict and 'messages' for the history
-            app.invoke({
-                "question": prompt, 
-                "messages": [HumanMessage(content=prompt)]
-            }, config)
+        with st.chat_message("assistant"):
             
-            st.rerun()
+            # 🌟 Create separate UI containers for Thoughts and Final Messages
+            thought_expander = st.expander("🧠 Agent Thoughts", expanded=True)
+            thought_placeholder = thought_expander.empty()
+            
+            message_placeholder = st.empty()
+            
+            full_thought_text = ""
+            full_message_text = ""
+            current_event_type = "message"  # Default event type
+            
+            payload = {
+                "thread_id": st.session_state.thread_id,
+                "user_id": st.session_state.user_id,
+                "message": prompt
+            }
+            
+            try:
+                with requests.post(f"{FASTAPI_URL}/chat/stream", json=payload, stream=True) as r:
+                    for line in r.iter_lines():
+                        if line:
+                            decoded_line = line.decode('utf-8')
+                            
+                            # 🌟 1. Detect which event we are currently receiving
+                            if decoded_line.startswith("event: "):
+                                current_event_type = decoded_line[7:].strip()
+                            
+                            # 🌟 2. Parse the data payload for that event
+                            elif decoded_line.startswith("data: "):
+                                data = decoded_line[6:]
+                                
+                                if data == "__INTERRUPT__":
+                                    st.rerun()
+                                    break
+                                    
+                                data = data.replace('\\n', '\n')
+                                
+                                # 🌟 3. Route the text to the correct UI box
+                                if current_event_type == "thought":
+                                    full_thought_text += data
+                                    thought_placeholder.markdown(full_thought_text + "▌")
+                                elif current_event_type == "message":
+                                    full_message_text += data
+                                    message_placeholder.markdown(full_message_text + "▌")
+                                    
+                # Final cleanup (remove the "▌" blinking cursors)
+                if full_thought_text:
+                    thought_placeholder.markdown(full_thought_text)
+                else:
+                    thought_placeholder.markdown("_Direct response generated without background tools._")
+                    
+                message_placeholder.markdown(full_message_text)
+                
+                # Refresh page to log the state to history properly
+                st.rerun()
+                
+            except Exception as e:
+                st.error(f"Stream error: {e}")

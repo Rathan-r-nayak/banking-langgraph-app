@@ -49,3 +49,17 @@
    - LLM-as-a-Judge Evals (Golden dataset testing for RAG accuracy before deployment)
 
 ![alt text](image.png)
+
+
+- run the MCP server
+```
+uvicorn server:app
+```
+- run the fastapi langraph app server
+```
+uvicorn server:app --host 127.0.0.1 --port 8080 --reload
+```
+- run the ui
+```
+uv run streamlit run ui.py
+```

@@ -1,6 +1,7 @@
 # Nodes/remember_node.py
 import uuid
-from pydantic import BaseModel, Field
+import json
+from pydantic import BaseModel, Field, ValidationError
 from typing import List
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableConfig
@@ -12,7 +13,6 @@ from Utils.Logger import get_logger
 
 logger = get_logger("REMEMBER_NODE")
 
-# 🌟 1. Define the exact JSON schema we want
 class MemoryFact(BaseModel):
     fact: str = Field(description="A distinct, standalone fact about the user's finances or preferences.")
 
@@ -23,7 +23,6 @@ class MemoryExtraction(BaseModel):
     )
 
 def remember_node(state: BankingState, config: RunnableConfig, store: BaseStore):
-    """Intelligently extracts long-term banking facts using strict Pydantic schemas."""
     logger.info("--- 💾 RUNNING REMEMBER NODE (LTM EXTRACTION) ---")
     
     user_id = config.get("configurable", {}).get("user_id", "default_user")
@@ -33,39 +32,52 @@ def remember_node(state: BankingState, config: RunnableConfig, store: BaseStore)
     if not messages:
         return {}
         
-    # Grab the last 4 messages to catch the user's request and the AI's final answer
-    recent_messages = messages[-4:]
-    transcript = "\n".join([f"{msg.type.upper()}: {msg.content}" for msg in recent_messages])
+    # Grab the latest human message to look for direct introductions
+    latest_human_msg = next((msg.content for msg in reversed(messages) if msg.type == 'human'), "")
+    
+    # Force-extract obvious statements like "I am [Name]" or "My name is [Name]" instantly
+    import re
+    name_match = re.search(r"(?:i am|i'm|my name is)\s+([a-zA-Z]+)", latest_human_msg, re.IGNORECASE)
+    if name_match:
+        name = name_match.group(1).capitalize()
+        fact_text = f"User's name is {name}"
+        store.put(namespace, str(uuid.uuid4()), {"fact": fact_text})
+        logger.info(f"💾 [LTM Direct Saved] -> {fact_text}")
+        return {}
+
+    # Otherwise, run standard LLM extraction on transcript history...
+    transcript = "\n".join([f"{msg.type.upper()}: {msg.content}" for msg in messages[-4:]])
     
     prompt = ChatPromptTemplate.from_messages([
-        ("system", "You are a precise data extraction assistant."),
-        ("human", (
-            "Analyze the conversation below. Extract any durable, long-term personal facts about the user "
-            "(e.g., salary, financial goals, preferred accounts, risk appetite, or recurring financial constraints) "
-            "that would be useful to remember for future banking sessions.\n\n"
-            "Transcript:\n{transcript}"
-        ))
+        ("system", """You are an advanced Long-Term Memory (LTM) extraction agent. 
+    Extract permanent, durable user facts (identity, account preferences, explicit rules). 
+    If the user states their name, occupation, or preferences, extract them into the list.
+    Output STRICTLY as a JSON object:
+    {{
+        "memories": ["User's name is Rathan"]
+    }}
+    """),
+            ("human", "Conversation:\n{chat_history}")
     ])
     
-    # 🌟 2. Force the fast LLM (e.g., GPT-4o-mini) to output the Pydantic schema
-    chain = prompt | fast_llm.with_structured_output(MemoryExtraction)
+    chain = prompt | fast_llm
     
     try:
-        # Returns a clean Python object, no manual JSON parsing needed!
-        extraction: MemoryExtraction = chain.invoke({"transcript": transcript})
+        response = chain.invoke({"chat_history": transcript})
+        raw_content = response.content.strip()
         
-        saved_count = 0
+        if raw_content.startswith("```"):
+            lines = raw_content.splitlines()
+            if lines[0].startswith("```"): lines = lines[1:]
+            if lines and lines[-1].startswith("```"): lines = lines[:-1]
+            raw_content = "\n".join(lines).strip()
+
+        data = json.loads(raw_content)
+        extraction = MemoryExtraction.model_validate(data)
+        
         for item in extraction.facts:
-            store.put(
-                namespace, 
-                str(uuid.uuid4()), 
-                {"fact": item.fact}
-            )
+            store.put(namespace, str(uuid.uuid4()), {"fact": item.fact})
             logger.info(f"💾 [LTM Saved] -> {item.fact}")
-            saved_count += 1
-            
-        if saved_count == 0:
-            logger.info("ℹ️ No new long-term facts extracted.")
             
     except Exception as e:
         logger.error(f"❌ Failed to extract memory: {e}")

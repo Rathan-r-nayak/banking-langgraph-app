@@ -1,22 +1,28 @@
-# Edges/route_worker_tools.py
-from State.banking_state import WorkerState
-from langgraph.graph import END
+from Utils.Logger import get_logger
 
-def route_worker_tools(state: WorkerState):
-    """Routes tools inside the Sub-Graph."""
+logger = get_logger("ROUTE_WORKER_TOOLS")
+
+def route_worker_tools(state: dict):
     messages = state.get("messages", [])
+    
+    if not messages:
+        logger.warning("⚠️ No messages found in worker state! Routing to END.")
+        return "__end__"
+        
     last_message = messages[-1]
     
-    # 🌟 If no tools were called, the task is finished! 
-    if not hasattr(last_message, "tool_calls") or not last_message.tool_calls:
-        return END
+    if hasattr(last_message, "tool_calls") and last_message.tool_calls:
+        task = state.get("task")
         
-    SENSITIVE_TOOLS = {"transfer_money", "pay_bill", "update_password"}
-    
-    for tc in last_message.tool_calls:
-        if tc["name"] == "search_bank_policies":
-            return "rag_subgraph"
-        if tc["name"] in SENSITIVE_TOOLS:
-            return "sensitive_tools_node"
-            
-    return "safe_tools_node"
+        if task and hasattr(task, "tool_type"):
+            if task.tool_type == "safe":
+                return "safe_tools_node"
+            elif task.tool_type == "sensitive":
+                return "sensitive_tools_node"
+            elif task.tool_type == "rag":
+                return "rag_subgraph" # 🌟 Updated to exactly match the node name in worker_sub_graph.py
+                
+        logger.warning("⚠️ Task tool_type missing. Defaulting to safe_tools_node.")
+        return "safe_tools_node"
+        
+    return "__end__"

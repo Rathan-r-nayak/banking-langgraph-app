@@ -97,41 +97,41 @@ def fetch_user_ltm(config: RunnableConfig, store: BaseStore) -> str:
     return "No previous memory."
 
 
-def analyze_image_context(image_path: str) -> str:
-    """
-    Uses the Vision LLM to analyze IT-specific images (errors, logs, diagrams).
-    Extracts text, error codes, and system states to inject into the text prompt.
-    """
-    try:
-        mime_type, _ = mimetypes.guess_type(image_path)
-        mime_type = mime_type or "image/jpeg"
+# def analyze_image_context(image_path: str) -> str:
+#     """
+#     Uses the Vision LLM to analyze IT-specific images (errors, logs, diagrams).
+#     Extracts text, error codes, and system states to inject into the text prompt.
+#     """
+#     try:
+#         mime_type, _ = mimetypes.guess_type(image_path)
+#         mime_type = mime_type or "image/jpeg"
 
-        with open(image_path, "rb") as image_file:
-            encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
+#         with open(image_path, "rb") as image_file:
+#             encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
             
-        message = HumanMessage(
-            content=[
-                {
-                    "type": "text", 
-                    "text": (
-                        "You are an L3 Technical Support Vision AI. Analyze this image. "
-                        "1. If it's an error screen/terminal, extract the exact error codes and text. "
-                        "2. If it's a software UI, describe the application state and any visible issues. "
-                        "3. If it's a network/architecture diagram, list the connected components. "
-                        "Focus entirely on actionable technical context. Do not describe aesthetic elements."
-                    )
-                },
-                {
-                    "type": "image_url", 
-                    "image_url": {"url": f"data:{mime_type};base64,{encoded_string}"}
-                }
-            ]
-        )
+#         message = HumanMessage(
+#             content=[
+#                 {
+#                     "type": "text", 
+#                     "text": (
+#                         "You are an L3 Technical Support Vision AI. Analyze this image. "
+#                         "1. If it's an error screen/terminal, extract the exact error codes and text. "
+#                         "2. If it's a software UI, describe the application state and any visible issues. "
+#                         "3. If it's a network/architecture diagram, list the connected components. "
+#                         "Focus entirely on actionable technical context. Do not describe aesthetic elements."
+#                     )
+#                 },
+#                 {
+#                     "type": "image_url", 
+#                     "image_url": {"url": f"data:{mime_type};base64,{encoded_string}"}
+#                 }
+#             ]
+#         )
         
-        logger.info("Analyzing attached image for technical context...")
-        response = primary_llm.invoke([message])
-        return response.content
+#         logger.info("Analyzing attached image for technical context...")
+#         response = primary_llm.invoke([message])
+#         return response.content
         
-    except Exception as e:
-        logger.error(f"Vision Error: {e}")
-        return "System failed to analyze the attached image."
+#     except Exception as e:
+#         logger.error(f"Vision Error: {e}")
+#         return "System failed to analyze the attached image."

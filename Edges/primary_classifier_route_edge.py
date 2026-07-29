@@ -15,4 +15,4 @@ def route_triage(state: BankingState):
         return "orchestrator"
 
     logger.info("🛑 ROUTING: Direct response generated. Ending graph.")
-    return END
+    return "remember_node"

@@ -75,7 +75,6 @@ async def lifespan(app: FastAPI):
         yield
     logger.info("🛑 Disconnected from FastMCP.")
 
-# 🌟 CRITICAL FIX: Pass the lifespan function into FastAPI here
 app = FastAPI(title="Banking Agent API", lifespan=lifespan)
 
 app.add_middleware(

@@ -25,7 +25,6 @@ class BankingState(TypedDict, total=False):
     is_safe: bool
     requires_workflow: bool
     
-    # 🌟 FIX: Added this key so LangGraph actually saves the Orchestrator's decision!
     is_workflow_complete: bool 
     
     documents: list[dict]

@@ -67,3 +67,4 @@ uv run streamlit run ui.py
 ```
 python -m phoenix.server.main
 ```
+

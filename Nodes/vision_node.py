@@ -21,7 +21,7 @@ def analyze_image_context(image_path: str) -> str:
                 {
                     "type": "text", 
                     "text": (
-                        # 🌟 NOTE: I updated your prompt to fit a Banking context instead of IT Support
+                        # 🌟 NOTE: I uimage_pathpdated your prompt to fit a Banking context instead of IT Support
                         "You are a Banking Vision AI. Analyze this image. "
                         "1. If it's a screenshot of an app error, extract the exact error codes and text. "
                         "2. If it's a receipt or transaction screenshot, extract amounts, dates, and account numbers. "
